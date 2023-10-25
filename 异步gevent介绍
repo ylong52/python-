@@ -1,0 +1,57 @@
+'''
+Gevent是一个基于协程的Python库，它提供了一个简单的方法来异步地执行函数，从而提高代码的并发性能。
+它使用greenlet库来实现协程，使得在Python中编写异步代码变得更加容易。
+Gevent提供了一些工具和模块，如gevent.spawn，gevent.joinall和gevent.queue，可以用来创建和管理协程，以及实现并发编程。
+它还可以与Python的许多其他库和框架（如Django，Flask和Requests）一起使用，以提高并发性能。
+'''
+
+from gevent import monkey; monkey.patch_all()
+import gevent
+import  random
+import socket
+import  time
+
+def test1(i):
+   x = random.randint(10,20)
+   print(f"wait {i}系列，等{x}时间")
+   gevent.sleep(x)
+   print(f"{i} 系列>>>>")
+
+t = '开始时间：' + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+print(t)
+start_time = time.time()
+jobs = [gevent.spawn(test1,i) for i in range(4)]
+
+gevent.joinall(jobs, timeout=30)
+
+t = '结束时间：' + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+print(t)
+end_time = time.time()
+elapsed_time = end_time - start_time
+print(f"Elapsed time: {elapsed_time} seconds")
+
+# 安装
+#/*    
+#     pip install gevent
+#     pip install socket
+#
+#*/
+
+#运行输出：
+
+开始时间：2023-10-25 16:35:36
+wait 0系列，等15时间
+wait 1系列，等17时间
+wait 2系列，等20时间
+wait 3系列，等12时间
+3 系列>>>>
+0 系列>>>>
+1 系列>>>>
+2 系列>>>>
+结束时间：2023-10-25 16:35:56
+Elapsed time: 20.029463052749634 seconds
+
+Process finished with exit code 0
+1，一般是程序顺序执行是所有程序时长的总时，应是15+17+20+12.
+2，从gevent代码上面的结果判断执行多个函数是以时间2系列，最长的20秒为运行时间。这就是我们要的最优的异步运行方案
+
