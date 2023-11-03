@@ -1,0 +1,237 @@
+'''
+微信：wx170035
+日期：2023-11-3
+异步协程多浏览器开启playwright，实现百度的点击
+
+'''
+import asyncio, aiomysql
+import concurrent.futures
+import os, re, requests, base64, sys, json, time, logging,subprocess
+
+from playwright.async_api import Playwright, async_playwright, expect
+import  random
+userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/73.0.3683.103 Safari/537.36"
+
+logger = logging.getLogger('my_logger')
+logger.setLevel(logging.DEBUG)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+# 将句柄添加到日志记录器
+logger.addHandler(console_handler)
+# 创建一个文件句柄，将日志输出到文件
+t = time.strftime('%Y%m%d', time.localtime(time.time()))
+file_handler = logging.FileHandler(f"my_logger{t}.log")
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(formatter)
+# 将句柄添加到日志记录器
+logger.addHandler(file_handler)
+
+# MAX_WAIT_TIME= 1000 * 60 * 5
+
+userProxy = False
+
+FBL = [{'width': 1600, 'height': 1200}, {'width': 1280, 'height': 1024}, {'width': 1152, 'height': 864},
+           {'width': 1024, 'height': 768}, {'width': 1920, 'height': 1080},
+           {'width': 1768, 'height': 992}, {'width': 1680, 'height': 1050}, {'width': 1440, 'height': 900},
+           {'width': 1280, 'height': 1024}, {'width': 1280, 'height': 960},
+           {'width': 1280, 'height': 720}, {'width': 1176, 'height': 664}, {'width': 1536, 'height': 864}]
+'''
+# open_baidu 函数需要较长时间才能完成，那么增加 max_workers 可能会导致等待任务完成的时间增加。在这种情况下，你可以考虑将 hotkeywords 的处理分成多个较小的批次，每个批次使用不同的 max_workers 值，以平衡并发线程的数量和等待时间。
+
+2023.10.22通过windows 4G内存调试最好的
+MAX_WORKERS = 5
+DbLimit = 5
+CPU = 90%,执行大约3分钟
+5个词生成19个目标图片（打开了19个链接）
+'''
+MAX_WORKERS = 1
+DbLimit = 1
+
+
+async def main():
+    global MAX_WORKERS
+    rows = await  get_data_from_mysql()
+
+    if not rows:
+        return None
+
+    hotkeywords = [row[2] for row in rows]
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = [executor.submit(open_baidu, keyword) for keyword in hotkeywords]
+            # 检查Future对象是否已完成
+            completed_futures = []
+            for future in concurrent.futures.as_completed(futures):
+                if future.done():
+                    completed_futures.append(future)
+                else:
+                    # 如果Future对象尚未完成，请等待并重新检查
+                    await asyncio.sleep(1)
+            if len(completed_futures) == len(futures):
+                await asyncio.gather(*[future.result() for future in concurrent.futures.as_completed(futures)])
+            else:
+                print("Not all futures completed.")
+    except Exception as e:
+        kill_chrome_processes()
+
+async def get_data_from_mysql():
+    # 连接到数据库
+    conn = await aiomysql.connect(
+        host='127.0.0.1',
+        user='wiki_20wy_cn',
+        password='eB5hdim2K8A54nf8',
+        db='wiki_20wy_cn',
+        loop=loop
+    )
+
+    # 创建一个游标对象
+    async with conn.cursor() as cur:
+        # 定义要执行的 SQL 查询
+        global DbLimit
+        # sql_query = f"SELECT * FROM xg_searchkeyword where status=0 limit {DbLimit}"
+        sql_query = f"SELECT * FROM xg_searchkeyword  limit {DbLimit}"
+        await cur.execute(sql_query)
+        result = await cur.fetchall()
+        if not result:
+            return None
+        else:
+            ids = [row[0] for row in result]
+            # sql_update = "UPDATE xg_searchkeyword SET status=1 WHERE id=%s"
+            # comma_separated = ','.join(map(str, ids))
+            # sql_update = f"UPDATE xg_searchkeyword SET status=1 WHERE id IN ({comma_separated})"
+            # print(sql_update)
+            # await cur.execute(sql_update)
+            # # 提交事务
+            # await conn.commit()
+
+    return result
+
+
+# 异步执行获取数据任务
+loop = asyncio.get_event_loop()
+
+async def open_baidu(hotkeyword):
+    async with async_playwright() as p:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36'
+        }
+        options = {"channel": "chrome"}
+        options["headless"] = False
+        options["slow_mo"] = 3000
+        if userProxy:
+            _ip = await get_ipaddress()
+            if not _ip:
+                logger.info(f"错误！代理IP")
+                return None
+            logger.info(f"取得代理IP >>>> {_ip}")
+            logger.info(f"百度查关键词 >>>> {hotkeyword}")
+            options["proxy"] = {"server": "http://" + _ip}
+
+        browser = await p.chromium.launch(**options)
+        random_choice = random.choice(FBL)
+        context = await browser.new_context(
+            viewport={'width': random_choice['width'], 'height': random_choice['height']},
+            locale='de-DE',
+            user_agent=userAgent
+        )
+
+        # logger.info(f"关键词 >>>> {hotkeyword}")
+        # # 异步执行获取数据任务
+        # loop = asyncio.get_event_loop()
+        pageurl = 'https://www.baidu.com'
+        domain = "_baidu_"
+        try:
+            page = await context.new_page()
+            await page.goto(url=pageurl)
+            # await page.wait_for_load_state("networkidle", timeout=3 * 60 * 1000)
+            await page.wait_for_selector(selector="body",timeout=10000)
+            # 获取新页面打开后的标题
+            new_page_title = await page.title()
+            # log = '打开链接时间：' + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+            # logger.debug(log)
+            log = f"line:116  打开百度，取页面标题: {new_page_title}"
+            logger.debug(log)
+            await page.locator("#kw:visible").fill(hotkeyword)
+            await page.locator("#kw:visible").press("Enter")
+            await page.wait_for_selector(selector=".tts-title",timeout=10000)
+
+            # 循环处理每个 h3 标签的点击事件
+            elements = await page.query_selector_all("h3.c-title.t.t.tts-title>a")
+            for index, a_element in enumerate(elements):
+                logger.info(f"找到关键词 >>>> {hotkeyword}")
+                a_href = await a_element.get_attribute('href')
+                logger.info(f"a_href: {a_href}")
+                async with context.expect_page() as new_tabpage_info:
+                    await a_element.click()
+
+                new_tabpage = await new_tabpage_info.value
+                await new_tabpage.wait_for_load_state(timeout=50000)
+                new_tabpage_title = await new_tabpage.title()
+                if new_tabpage_title:
+                    filename = re.findall(r'[\u4e00-\u9fa5a-zA-Z]', new_page_title)
+                    filename = f"[{hotkeyword}]" + (''.join(filename)[:30])
+                    logger.info(f"No.{index}词子页面标题:{hotkeyword}: {new_page_title}")
+                    await new_tabpage.screenshot(path="./images/" + time.strftime(filename + '_%Y%m%d_%H%M%S',time.localtime(time.time())) + ".jpeg")
+            await new_tabpage.wait_for_timeout(1000)
+            await new_tabpage.close()
+
+        except Exception as e:
+            if not page:
+                pass
+            else:
+               await page.close()
+            logger.error(f"找到关键词出错!!!:{hotkeyword}")
+            logger.error(f"Error : {e}")
+
+
+ipArray = []
+async def get_ipjson_array():
+    global ipArray
+    url = 'http://gev.*.com/api/?apikey=***&num=60&type=json&line=win&proxy_type=secret&end_time=0'  #代理IP
+    response = requests.get(url)
+    pattern = r'ERROR'
+    ret = bool(re.search(pattern, response.text))
+    if not ret:
+        arr = json.loads(response.text)
+        for item in arr:
+            ipArray.append(item)
+
+
+async def get_ipaddress():  # 定义 process_array 函数，用于处理获取到的数组，将其添加到全局变量 BB 中，然后将其从 BB 中移除
+    global ipArray
+    i = 0
+    while i<3:
+        i = i+1
+        if len(ipArray) < 10:
+            await asyncio.sleep(3)
+            await get_ipjson_array()
+        if len(ipArray) >1:
+            return ipArray.pop()
+
+
+
+def find_chrome_processes():
+    # 运行ps -aux命令获取进程列表
+    result = subprocess.run(["tasklist"], stdout=subprocess.PIPE, text=True)
+    # 使用正则表达式筛选出Chrome进程
+    processes = []
+    for line in result.stdout.splitlines():
+        process = line.split()
+        if process:
+            processes.append({"pid": int(process[1]), "name": process[0]})
+
+    return processes
+
+def kill_chrome_processes():
+    subprocess.run(["taskkill", "/fi", "imagename eq chrone.exe", "/f"], stdout=subprocess.PIPE, text=True)
+
+
+if __name__ == '__main__':
+    logger.info(f"程序启动时间 >>>>>>>>>>>>>>>>" + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time())))
+    kill_chrome_processes()
+    asyncio.get_event_loop().run_until_complete(main())
+    kill_chrome_processes()
+    logger.info(f"程序结整时间 >>>>>>>>>>>>>>>>" + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time())))
+
