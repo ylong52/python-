@@ -96,13 +96,16 @@ def start_streaming():
 
 
 # RabbitMQSender队列发送代码
+
 def RabbitMQSender():
+
     connection = pika.BlockingConnection(
         pika.ConnectionParameters(host=RABBITMQ_HOST))
+        
     channel = connection.channel()
-
+    
     channel.queue_declare(queue='hello',durable=True)
-
+    
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # print(current_time)
